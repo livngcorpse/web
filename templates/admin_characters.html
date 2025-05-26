@@ -15,3 +15,258 @@
                     </a>
                     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#uploadModal">
                         <i class="bi bi-plus"></i> Add Character
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Characters List -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="bi bi-list"></i> All Characters</h5>
+                </div>
+                <div class="card-body">
+                    {% if characters %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Image</th>
+                                    <th>Name</th>
+                                    <th>Anime/Series</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for character in characters %}
+                                <tr>
+                                    <td>
+                                        <img src="/images/{{ character[1] }}" 
+                                             alt="{{ character[2] }}" 
+                                             class="rounded" 
+                                             style="width: 60px; height: 60px; object-fit: cover;">
+                                    </td>
+                                    <td>
+                                        <strong>{{ character[2] }}</strong>
+                                    </td>
+                                    <td>
+                                        <span class="text-muted">{{ character[3] }}</span>
+                                    </td>
+                                    <td>
+                                        <div class="btn-group btn-group-sm">
+                                            <button class="btn btn-outline-primary" onclick="editCharacter({{ character[0] }}, '{{ character[2] }}', '{{ character[3] }}')">
+                                                <i class="bi bi-pencil"></i> Edit
+                                            </button>
+                                            <button class="btn btn-outline-danger" onclick="deleteCharacter({{ character[0] }}, '{{ character[2] }}')">
+                                                <i class="bi bi-trash"></i> Delete
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    {% if total_pages > 1 %}
+                    <nav class="mt-4">
+                        <ul class="pagination justify-content-center">
+                            {% if current_page > 1 %}
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ current_page - 1 }}">Previous</a>
+                            </li>
+                            {% endif %}
+                            
+                            {% for page_num in range(1, total_pages + 1) %}
+                                {% if page_num == current_page %}
+                                <li class="page-item active">
+                                    <span class="page-link">{{ page_num }}</span>
+                                </li>
+                                {% elif page_num == 1 or page_num == total_pages or (page_num >= current_page - 2 and page_num <= current_page + 2) %}
+                                <li class="page-item">
+                                    <a class="page-link" href="?page={{ page_num }}">{{ page_num }}</a>
+                                </li>
+                                {% elif page_num == current_page - 3 or page_num == current_page + 3 %}
+                                <li class="page-item disabled">
+                                    <span class="page-link">...</span>
+                                </li>
+                                {% endif %}
+                            {% endfor %}
+                            
+                            {% if current_page < total_pages %}
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ current_page + 1 }}">Next</a>
+                            </li>
+                            {% endif %}
+                        </ul>
+                    </nav>
+                    {% endif %}
+                    {% else %}
+                    <div class="text-center py-4">
+                        <i class="bi bi-inbox fs-1 text-muted"></i>
+                        <h4 class="mt-3">No characters found</h4>
+                        <p class="text-muted">Upload some characters to get started!</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Modal -->
+<div class="modal fade" id="uploadModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add New Character</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="name" class="form-label">Character Name</label>
+                        <input type="text" class="form-control" id="name" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="anime" class="form-label">Anime/Series</label>
+                        <input type="text" class="form-control" id="anime" name="anime" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="file" class="form-label">Image File</label>
+                        <input type="file" class="form-control" id="file" name="file" accept="image/*" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitUpload()">
+                    <i class="bi bi-upload"></i> Upload
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Character</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editForm">
+                    <input type="hidden" id="editId" name="id">
+                    <div class="mb-3">
+                        <label for="editName" class="form-label">Character Name</label>
+                        <input type="text" class="form-control" id="editName" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editAnime" class="form-label">Anime/Series</label>
+                        <input type="text" class="form-control" id="editAnime" name="anime" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitEdit()">
+                    <i class="bi bi-check"></i> Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function submitUpload() {
+    const form = document.getElementById('uploadForm');
+    const formData = new FormData(form);
+    
+    try {
+        const response = await fetch('/admin/upload', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            alert('Character uploaded successfully!');
+            location.reload();
+        } else {
+            alert('Error: ' + result.detail);
+        }
+    } catch (error) {
+        alert('Upload failed: ' + error.message);
+    }
+}
+
+function editCharacter(id, name, anime) {
+    document.getElementById('editId').value = id;
+    document.getElementById('editName').value = name;
+    document.getElementById('editAnime').value = anime;
+    
+    const editModal = new bootstrap.Modal(document.getElementById('editModal'));
+    editModal.show();
+}
+
+async function submitEdit() {
+    const form = document.getElementById('editForm');
+    const formData = new FormData(form);
+    const id = formData.get('id');
+    
+    try {
+        const response = await fetch(`/admin/characters/${id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                name: formData.get('name'),
+                anime: formData.get('anime')
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            alert('Character updated successfully!');
+            location.reload();
+        } else {
+            alert('Error: ' + result.detail);
+        }
+    } catch (error) {
+        alert('Update failed: ' + error.message);
+    }
+}
+
+async function deleteCharacter(id, name) {
+    if (confirm(`Are you sure you want to delete "${name}"?`)) {
+        try {
+            const response = await fetch(`/admin/characters/${id}`, {
+                method: 'DELETE'
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+                alert('Character deleted successfully!');
+                location.reload();
+            } else {
+                alert('Error: ' + result.detail);
+            }
+        } catch (error) {
+            alert('Delete failed: ' + error.message);
+        }
+    }
+}
+</script>
+{% endblock %}

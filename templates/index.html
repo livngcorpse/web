@@ -1,0 +1,262 @@
+<!-- templates/index.html -->
+{% extends "base.html" %}
+
+{% block content %}
+<div class="search-container">
+    <div class="container">
+        <h1 class="text-center mb-4">
+            <i class="bi bi-search-heart"></i> Discover Your Favorite Characters
+        </h1>
+        
+        <!-- Text Search -->
+        <div class="row justify-content-center mb-4">
+            <div class="col-md-8">
+                <form method="get" class="d-flex">
+                    <input type="text" class="form-control form-control-lg" 
+                           name="search" value="{{ search }}" 
+                           placeholder="Search by character name, anime, or emojis...">
+                    <button type="submit" class="btn btn-light btn-lg ms-2">
+                        <i class="bi bi-search"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Reverse Image Search -->
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="reverse-search-area" id="dropArea">
+                    <i class="bi bi-cloud-upload fs-1 text-muted mb-3"></i>
+                    <h5>Reverse Image Search</h5>
+                    <p class="mb-3">Drag & drop an image here or click to upload</p>
+                    <input type="file" id="imageUpload" accept="image/*" style="display: none;">
+                    <button type="button" class="btn btn-outline-primary" onclick="document.getElementById('imageUpload').click();">
+                        Choose Image
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <!-- Results Info -->
+    {% if search %}
+    <div class="alert alert-info">
+        <i class="bi bi-info-circle"></i>
+        Found {{ total_count }} characters matching "{{ search }}"
+    </div>
+    {% endif %}
+
+    <!-- Loading indicator -->
+    <div id="loading" class="loading">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <p class="mt-2">Searching for similar images...</p>
+    </div>
+
+    <!-- Reverse search results -->
+    <div id="searchResults" style="display: none;">
+        <h3 class="mb-3"><i class="bi bi-stars"></i> Similar Characters Found</h3>
+        <div id="matchResults"></div>
+        <button class="btn btn-secondary mb-4" onclick="hideSearchResults()">Show All Characters</button>
+    </div>
+
+    <!-- Character Gallery -->
+    <div id="characterGallery">
+        {% if characters %}
+        <div class="gallery-grid">
+            {% for character in characters %}
+            <div class="character-card">
+                <img src="/images/{{ character[1] }}" 
+                     alt="{{ character[2] }}" 
+                     class="character-image"
+                     loading="lazy"
+                     onerror='this.src="data:image/svg+xml,<svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;280&quot; height=&quot;300&quot;><rect width=&quot;100%&quot; height=&quot;100%&quot; fill=&quot;%23f8f9fa&quot;/><text x=&quot;50%&quot; y=&quot;50%&quot; text-anchor=&quot;middle&quot; fill=&quot;%23dee2e6&quot; font-size=&quot;16&quot;>Image not found</text></svg>";'>
+                <div class="character-info">
+                    <div class="character-name">{{ character[2] }}</div>
+                    <div class="character-anime">{{ character[3] }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <div class="pagination-container">
+            <nav>
+                <ul class="pagination">
+                    {% if current_page > 1 %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ current_page - 1 }}{% if search %}&search={{ search }}{% endif %}">Previous</a>
+                    </li>
+                    {% endif %}
+                    
+                    {% for page_num in range(1, total_pages + 1) %}
+                        {% if page_num == current_page %}
+                        <li class="page-item active">
+                            <span class="page-link">{{ page_num }}</span>
+                        </li>
+                        {% elif page_num == 1 or page_num == total_pages or (page_num >= current_page - 2 and page_num <= current_page + 2) %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ page_num }}{% if search %}&search={{ search }}{% endif %}">{{ page_num }}</a>
+                        </li>
+                        {% elif page_num == current_page - 3 or page_num == current_page + 3 %}
+                        <li class="page-item disabled">
+                            <span class="page-link">...</span>
+                        </li>
+                        {% endif %}
+                    {% endfor %}
+                    
+                    {% if current_page < total_pages %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ current_page + 1 }}{% if search %}&search={{ search }}{% endif %}">Next</a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="text-center py-5">
+            <i class="bi bi-search fs-1 text-muted"></i>
+            <h3 class="mt-3">No characters found</h3>
+            <p class="text-muted">{% if search %}Try a different search term{% else %}The gallery is empty{% endif %}</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Drag and drop functionality
+const dropArea = document.getElementById('dropArea');
+const imageUpload = document.getElementById('imageUpload');
+
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    dropArea.addEventListener(eventName, preventDefaults, false);
+});
+
+function preventDefaults(e) {
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+['dragenter', 'dragover'].forEach(eventName => {
+    dropArea.addEventListener(eventName, highlight, false);
+});
+
+['dragleave', 'drop'].forEach(eventName => {
+    dropArea.addEventListener(eventName, unhighlight, false);
+});
+
+function highlight(e) {
+    dropArea.classList.add('dragover');
+}
+
+function unhighlight(e) {
+    droparea.classList.remove('dragover');
+}
+
+dropArea.addEventListener('drop', handleDrop, false);
+imageUpload.addEventListener('change', handleFileSelect, false);
+
+function handleDrop(e) {
+    const dt = e.dataTransfer;
+    const files = dt.files;
+    handleFiles(files);
+}
+
+function handleFileSelect(e) {
+    const files = e.target.files;
+    handleFiles(files);
+}
+
+function handleFiles(files) {
+    if (files.length > 0) {
+        const file = files[0];
+        if (file.type.startsWith('image/')) {
+            performReverseSearch(file);
+        } else {
+            alert('Please select an image file.');
+        }
+    }
+}
+
+async function performReverseSearch(file) {
+    const loading = document.getElementById('loading');
+    const searchResults = document.getElementById('searchResults');
+    const characterGallery = document.getElementById('characterGallery');
+    
+    loading.style.display = 'block';
+    searchResults.style.display = 'none';
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+        const response = await fetch('/reverse-search', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        loading.style.display = 'none';
+        
+        if (data.matches && data.matches.length > 0) {
+            displaySearchResults(data.matches);
+            characterGallery.style.display = 'none';
+            searchResults.style.display = 'block';
+        } else {
+            alert('No similar characters found.');
+        }
+    } catch (error) {
+        loading.style.display = 'none';
+        alert('Error performing reverse search: ' + error.message);
+    }
+}
+
+function displaySearchResults(matches) {
+    const matchResults = document.getElementById('matchResults');
+    matchResults.innerHTML = '';
+    
+    matches.forEach(match => {
+        const similarity = Math.round(match.similarity * 100);
+        const matchHtml = `
+            <div class="match-result p-3">
+                <div class="row align-items-center">
+                    <div class="col-md-3">
+                        <img src="/images/${match.filename}" 
+                             alt="${match.name}" 
+                             class="img-fluid rounded"
+                             style="max-height: 150px; object-fit: cover;">
+                    </div>
+                    <div class="col-md-9">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <div>
+                                <h5 class="mb-1">${match.name}</h5>
+                                <p class="text-muted mb-0">${match.anime}</p>
+                            </div>
+                            <span class="similarity-badge">${similarity}% match</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        matchResults.innerHTML += matchHtml;
+    });
+}
+
+function hideSearchResults() {
+    document.getElementById('searchResults').style.display = 'none';
+    document.getElementById('characterGallery').style.display = 'block';
+}
+
+// Click to upload
+dropArea.addEventListener('click', function() {
+    imageUpload.click();
+});
+</script>
+{% endblock %}
