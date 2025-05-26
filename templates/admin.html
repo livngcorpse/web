@@ -1,0 +1,171 @@
+<!-- templates/admin.html -->
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - Waifu Gallery{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2><i class="bi bi-speedometer2"></i> Admin Dashboard</h2>
+            <hr>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <div class="d-flex align-items-center">
+                        <div class="flex-grow-1">
+                            <h5 class="card-title">Total Characters</h5>
+                            <h2 class="mb-0">{{ total_characters }}</h2>
+                        </div>
+                        <div class="ms-3">
+                            <i class="bi bi-people fs-1"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <div class="d-flex align-items-center">
+                        <div class="flex-grow-1">
+                            <h5 class="card-title">Quick Actions</h5>
+                            <button class="btn btn-light btn-sm" onclick="triggerSync()">
+                                <i class="bi bi-arrow-clockwise"></i> Sync Now
+                            </button>
+                        </div>
+                        <div class="ms-3">
+                            <i class="bi bi-gear fs-1"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <div class="d-flex align-items-center">
+                        <div class="flex-grow-1">
+                            <h5 class="card-title">Management</h5>
+                            <a href="/admin/characters" class="btn btn-light btn-sm">
+                                <i class="bi bi-list"></i> View All
+                            </a>
+                        </div>
+                        <div class="ms-3">
+                            <i class="bi bi-collection fs-1"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Form -->
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="bi bi-cloud-upload"></i> Upload New Character</h5>
+                </div>
+                <div class="card-body">
+                    <form id="uploadForm" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label for="name" class="form-label">Character Name</label>
+                            <input type="text" class="form-control" id="name" name="name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="anime" class="form-label">Anime/Series</label>
+                            <input type="text" class="form-control" id="anime" name="anime" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="file" class="form-label">Image File</label>
+                            <input type="file" class="form-control" id="file" name="file" accept="image/*" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-upload"></i> Upload Character
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Characters -->
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="bi bi-clock-history"></i> Recent Characters</h5>
+                </div>
+                <div class="card-body">
+                    {% if recent_characters %}
+                    <div class="list-group list-group-flush">
+                        {% for character in recent_characters %}
+                        <div class="list-group-item d-flex align-items-center">
+                            <img src="/images/{{ character[1] }}" 
+                                 alt="{{ character[2] }}" 
+                                 class="rounded me-3" 
+                                 style="width: 50px; height: 50px; object-fit: cover;">
+                            <div class="flex-grow-1">
+                                <h6 class="mb-0">{{ character[2] }}</h6>
+                                <small class="text-muted">{{ character[3] }}</small>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-muted">No characters uploaded yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    
+    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Uploading...';
+    submitBtn.disabled = true;
+    
+    try {
+        const response = await fetch('/admin/upload', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            alert('Character uploaded successfully!');
+            this.reset();
+            location.reload(); // Refresh to show new character
+        } else {
+            alert('Error: ' + result.detail);
+        }
+    } catch (error) {
+        alert('Upload failed: ' + error.message);
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+});
+
+function triggerSync() {
+    if (confirm('This will start the Telegram scraper. Continue?')) {
+        // In a real implementation, this would trigger the scraper
+        alert('Sync feature would be implemented to run the scraper script.');
+    }
+}
+</script>
+{% endblock %}

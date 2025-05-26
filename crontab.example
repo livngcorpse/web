@@ -1,0 +1,7 @@
+# crontab.example
+# Add this to your crontab to run scraper every 6 hours
+# Run: crontab -e
+# Add line: 0 */6 * * * cd /path/to/waifu-gallery && docker-compose run --rm scraper
+
+# Alternative: systemd timer approach
+# 0 */6 * * * /usr/bin/docker-compose -f /path/to/docker-compose.yml run --rm scraper

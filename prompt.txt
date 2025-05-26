@@ -1,0 +1,98 @@
+Project Overview
+
+Build a self-hosted, scalable web application that:
+
+* **Downloads all waifu/husbando images** from a Telegram channel you are a member of (not owner).
+* **Parses Telegram message captions** to extract and store the **name** and **anime** of each character in **separate fields**.
+* Stores images locally with metadata in a database.
+* Provides a **web interface** for users to:
+
+  * Browse all images with their name and anime info displayed.
+  * Search by text: waifu/husbando name, anime name, or emojis.
+  * Upload an image to perform a **reverse image search** against the stored images, matching visually similar waifus/husbandos.
+* Features an **admin login panel** to:
+
+  * Upload new images manually with name and anime inputs.
+  * Edit existing waifu/husbando entries.
+  * Replace images to add new artwork.
+  * Trigger manual sync with Telegram channel data.
+* Supports **automatic syncing** by periodically running the Telegram scraper to download newly posted images and update the website.
+* Is fully containerized with **Docker** and easily deployable.
+
+---
+
+## Functional Requirements
+
+### Telegram Scraper
+
+* Authenticate as a **Telegram user** with Telethon using `api_id`, `api_hash`, and phone login.
+* Connect to a target **Telegram channel** (user is a member).
+* Fetch messages with photos in **batches**, including message ID and caption text.
+* Download images locally to an `images/` directory.
+* Extract the **caption text**, and parse it to separate the **name** and **anime** fields (e.g., `"Nico Robin - One Piece"` split by `-` or other delimiter).
+* Compute perceptual hash (`phash`) of the image for reverse search.
+* Store all metadata in a **SQLite** database (`id`, `filename`, `name`, `anime`, `phash`).
+* Track last processed message ID to avoid duplicates.
+* Support **periodic execution** to fetch newly posted images (e.g., via cron). Optionally support long-running mode for real-time updates.
+
+### Web Application
+
+* Built with **FastAPI** or **Flask** backend serving REST API and HTML pages.
+* Serve static files for downloaded images.
+* Home page: display a paginated gallery/grid of waifus/husbandos with images, names, and anime titles.
+* Implement **text search** filtering on name and anime fields (case-insensitive, emoji-support).
+* Implement **reverse image search**: user uploads an image, backend computes phash, compares to DB, returns closest matches.
+* Responsive and user-friendly UI with **Bootstrap** or **Tailwind CSS**.
+* Admin login with secure password authentication and session management.
+* Admin dashboard to:
+
+  * Upload new waifu/husbando images with name and anime fields.
+  * Edit or delete existing entries.
+  * Replace images to add new artwork versions.
+  * Manually trigger Telegram scraper sync.
+
+### Deployment & Maintenance
+
+* Containerize backend, scraper, and optionally NGINX reverse proxy using **Docker** and **docker-compose**.
+* Use volume mounts to persist database and images.
+* Run scraper periodically with cron or systemd timer on host machine or as a scheduled job inside a container.
+* Provide instructions for setting environment variables securely (Telegram credentials, admin passwords).
+* Optional: add HTTPS support via NGINX proxy with certbot SSL.
+
+---
+
+## Technical Tips & Considerations
+
+* Use **Telethon** as Telegram client to handle user login and channel message fetching.
+* Parse captions robustly, supporting multiple delimiters (`-`, `|`, `:`) and whitespace variations. Use regex if needed.
+* Compute image perceptual hashes with **imagehash.phash** for efficient reverse image lookup. Use a Hamming distance threshold (e.g., ≤ 5) to determine matches.
+* Optimize search queries using SQLite indexes on `name` and `anime` fields.
+* Validate all admin uploads for file type and size.
+* Secure admin routes and data with proper authentication and CSRF protections.
+* Handle large datasets with pagination or infinite scrolling on frontend.
+* Lazy-load images for performance on large galleries.
+* Log scraper activity and errors for monitoring.
+* Backup your SQLite database and image directory regularly.
+* Use environment variables or `.env` files to keep sensitive info out of source code.
+
+---
+
+## Optional Advanced Features
+
+* Integrate approximate nearest neighbor search libraries (e.g., FAISS) for faster reverse image search on large datasets.
+* Add full-text search with SQLite FTS or Elasticsearch for better fuzzy matching.
+* Support multiple Telegram channels as data sources for more waifus/husbandos.
+* Add user accounts with favorites, likes, or comment features.
+* Implement webhooks or Telegram Bot integration for instant new image notifications.
+* Build a REST API to allow external clients or apps to query the waifu/husbando database.
+
+---
+
+## Deliverables
+
+* Complete Telegram scraper script with caption parsing and DB storage.
+* Backend web app with all described frontend and admin features.
+* Dockerfile and docker-compose setup for easy deployment.
+* Documentation including setup instructions, environment variables, usage, and deployment guide.
+
+---
