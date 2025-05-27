@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, Request, Form, File, UploadFile, Query
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -10,13 +10,14 @@ import imagehash
 from PIL import Image
 import io
 import re
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import uvicorn
 from datetime import datetime
 import secrets
 import bcrypt
 from pathlib import Path
 import logging
+import json
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -85,6 +86,8 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ADMIN_PASSWORD_HASH = bcrypt.hashpw(ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt())
 
 def verify_admin_session(session_id: str) -> bool:
+    if not session_id:
+        return False
     conn = sqlite3.connect('waifu_gallery.db')
     cursor = conn.cursor()
     cursor.execute('SELECT 1 FROM admin_sessions WHERE session_id = ?', (session_id,))
@@ -105,6 +108,9 @@ def compute_phash(image_path: str) -> str:
     """Compute perceptual hash of an image"""
     try:
         with Image.open(image_path) as img:
+            # Convert to RGB if necessary
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
             return str(imagehash.phash(img))
     except Exception as e:
         logger.error(f"Error computing phash for {image_path}: {e}")
@@ -225,13 +231,14 @@ async def reverse_search(file: UploadFile = File(...)):
         for char_id, filename, name, anime, stored_phash in all_characters:
             if stored_phash:
                 distance = hamming_distance(upload_phash, stored_phash)
-                if distance <= 5:  # Threshold for similarity
+                if distance <= 10:  # Threshold for similarity (relaxed a bit)
+                    similarity = max(0, 1 - (distance / 64))  # Convert to similarity score
                     matches.append({
                         'id': char_id,
                         'filename': filename,
                         'name': name,
                         'anime': anime,
-                        'similarity': 1 - (distance / 64)  # Convert to similarity score
+                        'similarity': similarity
                     })
         
         # Sort by similarity
@@ -252,10 +259,25 @@ async def admin_login(password: str = Form(...)):
     if bcrypt.checkpw(password.encode('utf-8'), ADMIN_PASSWORD_HASH):
         session_id = create_admin_session()
         response = RedirectResponse(url="/admin", status_code=302)
-        response.set_cookie(key="admin_session", value=session_id, httponly=True)
+        response.set_cookie(key="admin_session", value=session_id, httponly=True, max_age=86400)  # 24 hours
         return response
     else:
         raise HTTPException(status_code=401, detail="Invalid password")
+
+@app.get("/admin/logout")
+async def admin_logout(request: Request):
+    session_id = request.cookies.get("admin_session")
+    if session_id:
+        # Remove session from database
+        conn = sqlite3.connect('waifu_gallery.db')
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM admin_sessions WHERE session_id = ?', (session_id,))
+        conn.commit()
+        conn.close()
+    
+    response = RedirectResponse(url="/admin/login", status_code=302)
+    response.delete_cookie("admin_session")
+    return response
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request):
@@ -294,7 +316,8 @@ async def admin_upload(
     
     try:
         # Generate unique filename
-        filename = f"{secrets.token_hex(8)}_{file.filename}"
+        file_extension = os.path.splitext(file.filename)[1] if file.filename else '.jpg'
+        filename = f"{secrets.token_hex(8)}{file_extension}"
         filepath = f"images/{filename}"
         
         # Save file
@@ -317,15 +340,23 @@ async def admin_upload(
         
         return {"success": True, "message": "Character uploaded successfully"}
         
+    except sqlite3.IntegrityError:
+        # Remove file if database insert fails
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        raise HTTPException(status_code=400, detail="Character with this image already exists")
     except Exception as e:
+        # Remove file if anything goes wrong
+        if 'filepath' in locals() and os.path.exists(filepath):
+            os.remove(filepath)
         logger.error(f"Upload error: {e}")
         raise HTTPException(status_code=500, detail="Error uploading file")
 
-@app.get("/admin/characters")
+@app.get("/admin/characters", response_class=HTMLResponse)
 async def admin_list_characters(request: Request, page: int = Query(1, ge=1)):
     session_id = request.cookies.get("admin_session")
     if not session_id or not verify_admin_session(session_id):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        return RedirectResponse(url="/admin/login")
     
     conn = sqlite3.connect('waifu_gallery.db')
     cursor = conn.cursor()
@@ -348,6 +379,36 @@ async def admin_list_characters(request: Request, page: int = Query(1, ge=1)):
         "current_page": page,
         "total_pages": total_pages
     })
+
+@app.put("/admin/characters/{character_id}")
+async def admin_update_character(
+    character_id: int, 
+    request: Request,
+    name: str = Form(...),
+    anime: str = Form(...)
+):
+    session_id = request.cookies.get("admin_session")
+    if not session_id or not verify_admin_session(session_id):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    conn = sqlite3.connect('waifu_gallery.db')
+    cursor = conn.cursor()
+    
+    # Check if character exists
+    cursor.execute('SELECT id FROM characters WHERE id = ?', (character_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    # Update character
+    cursor.execute(
+        'UPDATE characters SET name = ?, anime = ? WHERE id = ?',
+        (name.strip(), anime.strip(), character_id)
+    )
+    conn.commit()
+    conn.close()
+    
+    return {"success": True, "message": "Character updated successfully"}
 
 @app.delete("/admin/characters/{character_id}")
 async def admin_delete_character(character_id: int, request: Request):
@@ -375,11 +436,50 @@ async def admin_delete_character(character_id: int, request: Request):
     
     # Delete file
     try:
-        os.remove(f"images/{filename}")
-    except OSError:
-        pass  # File might not exist
+        file_path = f"images/{filename}"
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except OSError as e:
+        logger.warning(f"Could not delete file {filename}: {e}")
     
     return {"success": True, "message": "Character deleted successfully"}
 
+@app.post("/admin/sync")
+async def admin_sync_scraper(request: Request):
+    """Trigger the Telegram scraper (placeholder for actual implementation)"""
+    session_id = request.cookies.get("admin_session")
+    if not session_id or not verify_admin_session(session_id):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    # This is where you would implement the actual scraper trigger
+    # For now, it's just a placeholder
+    logger.info("Scraper sync requested")
+    
+    return {"success": True, "message": "Scraper sync initiated"}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        conn = sqlite3.connect('waifu_gallery.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM characters')
+        count = cursor.fetchone()[0]
+        conn.close()
+        return {"status": "healthy", "character_count": count}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+# Error handlers
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
+
+@app.exception_handler(500)
+async def server_error_handler(request: Request, exc):
+    logger.error(f"Server error: {exc}")
+    return templates.TemplateResponse("500.html", {"request": request}, status_code=500)
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
