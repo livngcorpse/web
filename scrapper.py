@@ -8,7 +8,7 @@ import imagehash
 from PIL import Image
 from telethon import TelegramClient
 from telethon.tl.types import MessageMediaPhoto
-import requests
+import secrets
 from pathlib import Path
 
 # Setup logging
@@ -21,7 +21,10 @@ class TelegramScraper:
         self.api_hash = api_hash
         self.phone = phone
         self.channel_username = channel_username
-        self.client = TelegramClient('session', api_id, api_hash)
+        
+        # Use sessions directory for session files
+        session_path = os.path.join("sessions", "scraper_session")
+        self.client = TelegramClient(session_path, api_id, api_hash)
         
         # Ensure directories exist
         os.makedirs("images", exist_ok=True)
@@ -29,14 +32,23 @@ class TelegramScraper:
         
     async def init_client(self):
         """Initialize and authenticate Telegram client"""
-        await self.client.start(phone=self.phone)
-        logger.info("Telegram client initialized successfully")
+        try:
+            await self.client.start(phone=self.phone)
+            
+            # Test if we're authenticated
+            me = await self.client.get_me()
+            logger.info(f"Authenticated as: {me.first_name} {me.last_name or ''} (@{me.username or 'no username'})")
+            
+        except Exception as e:
+            logger.error(f"Failed to authenticate Telegram client: {e}")
+            raise
         
     def init_database(self):
-        """Initialize database tables"""
+        """Initialize database tables - ensure compatibility with main.py"""
         conn = sqlite3.connect('waifu_gallery.db')
         cursor = conn.cursor()
         
+        # Use the same schema as main.py
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS characters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,9 +75,11 @@ class TelegramScraper:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_message_id ON characters(message_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_name ON characters(name)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_anime ON characters(anime)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_phash ON characters(phash)')
         
         conn.commit()
         conn.close()
+        logger.info("Database initialized successfully")
         
     def get_last_message_id(self) -> int:
         """Get the last processed message ID"""
@@ -83,27 +97,40 @@ class TelegramScraper:
         cursor = conn.cursor()
         cursor.execute('''
             INSERT OR REPLACE INTO scraper_state (id, last_message_id, channel_name, updated_at)
-            VALUES ((SELECT id FROM scraper_state WHERE channel_name = ?), ?, ?, ?)
+            VALUES (
+                (SELECT id FROM scraper_state WHERE channel_name = ?), 
+                ?, ?, ?
+            )
         ''', (self.channel_username, message_id, self.channel_username, datetime.now()))
         conn.commit()
         conn.close()
         
     def parse_caption(self, caption: str) -> tuple:
-        """Parse caption to extract name and anime"""
+        """Parse caption to extract name and anime with improved logic"""
         if not caption:
             return "Unknown", "Unknown"
         
         # Clean up caption - remove excessive whitespace and newlines
         caption = re.sub(r'\s+', ' ', caption.strip())
         
+        # Remove common prefixes like "Waifu:", "Husbando:", etc.
+        caption = re.sub(r'^(waifu|husbando|character):\s*', '', caption, flags=re.IGNORECASE)
+        
         # Try different delimiters in order of preference
-        delimiters = [' - ', ' | ', ': ', ' : ', ' from ', ' (', '(']
+        delimiters = [
+            ' - ',     # Most common: "Nico Robin - One Piece"
+            ' | ',     # Alternative: "Nico Robin | One Piece"
+            ' from ',  # English: "Nico Robin from One Piece"
+            ' (',      # Parentheses: "Nico Robin (One Piece)"
+            ': ',      # Colon: "Character: Nico Robin Anime: One Piece"
+            ' : ',     # Spaced colon
+        ]
         
         for delimiter in delimiters:
             if delimiter in caption:
-                if delimiter.startswith(' (') or delimiter == '(':
+                if delimiter == ' (':
                     # Handle parentheses specially
-                    match = re.search(r'(.+?)\s*\((.+?)\)', caption)
+                    match = re.search(r'^(.+?)\s*\(([^)]+)\)', caption)
                     if match:
                         name_part = match.group(1).strip()
                         anime_part = match.group(2).strip()
@@ -120,31 +147,62 @@ class TelegramScraper:
                 name = self.clean_text(name_part)
                 anime = self.clean_text(anime_part)
                 
-                # Remove common prefixes/suffixes
+                # Remove unwanted suffixes from anime
                 anime = re.sub(r'\).*$', '', anime)  # Remove anything after closing parenthesis
+                anime = re.sub(r'#.*$', '', anime)    # Remove hashtags
                 
+                # Validate extracted data
                 if name and anime and len(name) > 1 and len(anime) > 1:
-                    return name, anime
+                    # Ensure name isn't too long (probably not a character name)
+                    if len(name) <= 50 and len(anime) <= 50:
+                        return name.title(), anime.title()
         
-        # Fallback: try to extract from hashtags
+        # Try to extract from hashtags as fallback
         hashtags = re.findall(r'#(\w+)', caption)
         if len(hashtags) >= 2:
-            return hashtags[0], hashtags[1]
+            # First hashtag might be character, second might be anime
+            name = self.clean_text(hashtags[0])
+            anime = self.clean_text(hashtags[1])
+            if name and anime:
+                return name.title(), anime.title()
         
-        # Last resort: use the whole caption as name
+        # Try to extract character and anime keywords
+        char_match = re.search(r'(?:character|char|name):\s*([^,\n]+)', caption, re.IGNORECASE)
+        anime_match = re.search(r'(?:anime|series|from):\s*([^,\n]+)', caption, re.IGNORECASE)
+        
+        if char_match and anime_match:
+            name = self.clean_text(char_match.group(1))
+            anime = self.clean_text(anime_match.group(1))
+            if name and anime:
+                return name.title(), anime.title()
+        
+        # Last resort: use first meaningful part as character name
         clean_caption = self.clean_text(caption)
-        return clean_caption[:50] if clean_caption else "Unknown", "Unknown"
+        if clean_caption and len(clean_caption) <= 50:
+            return clean_caption.title(), "Unknown"
+        
+        return "Unknown", "Unknown"
     
     def clean_text(self, text: str) -> str:
         """Clean text by removing emojis and special characters"""
         if not text:
             return ""
         
-        # Remove emojis and special characters, keep alphanumeric, spaces, and common punctuation
-        text = re.sub(r'[^\w\s\-\.\!\?\,\:\;]', '', text)
+        # Remove URLs
+        text = re.sub(r'http[s]?://\S+', '', text)
+        
+        # Remove emojis and special characters, keep alphanumeric, spaces, and basic punctuation
+        text = re.sub(r'[^\w\s\-\.\!\?\,\:\;\'\"]', ' ', text)
+        
         # Remove excessive whitespace
         text = re.sub(r'\s+', ' ', text.strip())
-        return text
+        
+        # Remove common noise words
+        noise_words = ['waifu', 'husbando', 'character', 'anime', 'from', 'of', 'the']
+        words = text.split()
+        cleaned_words = [word for word in words if word.lower() not in noise_words or len(words) <= 2]
+        
+        return ' '.join(cleaned_words).strip()
     
     def compute_phash(self, image_path: str) -> str:
         """Compute perceptual hash of an image"""
@@ -153,12 +211,16 @@ class TelegramScraper:
                 # Convert to RGB if necessary
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                return str(imagehash.phash(img))
+                
+                # Resize image for consistent hashing (optional but recommended)
+                img = img.resize((256, 256), Image.Resampling.LANCZOS)
+                
+                return str(imagehash.phash(img, hash_size=8))
         except Exception as e:
             logger.error(f"Error computing phash for {image_path}: {e}")
             return ""
     
-    def is_duplicate_image(self, phash: str, threshold: int = 3) -> bool:
+    def is_duplicate_image(self, phash: str, threshold: int = 5) -> bool:
         """Check if image with similar hash already exists"""
         if not phash:
             return False
@@ -171,6 +233,7 @@ class TelegramScraper:
         
         for (existing_hash,) in existing_hashes:
             if existing_hash and self.hamming_distance(phash, existing_hash) <= threshold:
+                logger.info(f"Found duplicate image (distance: {self.hamming_distance(phash, existing_hash)})")
                 return True
         return False
     
@@ -182,15 +245,25 @@ class TelegramScraper:
     
     async def download_and_process_image(self, message, filename: str) -> dict:
         """Download image and extract metadata"""
+        image_path = f"images/{filename}"
+        
         try:
-            image_path = f"images/{filename}"
-            
             # Download image
             await self.client.download_media(message.media, image_path)
             logger.info(f"Downloaded image: {filename}")
             
+            # Verify image was downloaded successfully
+            if not os.path.exists(image_path) or os.path.getsize(image_path) == 0:
+                logger.error(f"Failed to download image: {filename}")
+                return None
+            
             # Compute perceptual hash
             phash = self.compute_phash(image_path)
+            
+            if not phash:
+                logger.warning(f"Could not compute hash for {filename}")
+                os.remove(image_path)
+                return None
             
             # Check for duplicates
             if self.is_duplicate_image(phash):
@@ -201,6 +274,8 @@ class TelegramScraper:
             # Parse caption
             caption = message.message or ""
             name, anime = self.parse_caption(caption)
+            
+            logger.info(f"Parsed: {name} from {anime} (Caption: {caption[:50]}...)")
             
             return {
                 'filename': filename,
@@ -214,7 +289,6 @@ class TelegramScraper:
         except Exception as e:
             logger.error(f"Error processing image {filename}: {e}")
             # Clean up failed download
-            image_path = f"images/{filename}"
             if os.path.exists(image_path):
                 os.remove(image_path)
             return None
@@ -236,33 +310,46 @@ class TelegramScraper:
                 image_data['message_id']
             ))
             conn.commit()
-            logger.info(f"Saved to database: {image_data['name']} from {image_data['anime']}")
+            logger.info(f"✅ Saved to database: {image_data['name']} from {image_data['anime']}")
             
         except sqlite3.IntegrityError as e:
-            logger.warning(f"Database integrity error (likely duplicate): {e}")
+            logger.warning(f"Database integrity error (likely duplicate filename): {e}")
+            # Remove the file if database insert fails
+            image_path = f"images/{image_data['filename']}"
+            if os.path.exists(image_path):
+                os.remove(image_path)
         except Exception as e:
             logger.error(f"Database error: {e}")
+            # Remove the file if database insert fails
+            image_path = f"images/{image_data['filename']}"
+            if os.path.exists(image_path):
+                os.remove(image_path)
         finally:
             conn.close()
     
-    async def scrape_channel(self, limit: int = 100, reverse: bool = True):
+    async def scrape_channel(self, limit: int = 100):
         """Scrape messages from the Telegram channel"""
         try:
             # Get channel entity
-            channel = await self.client.get_entity(self.channel_username)
-            logger.info(f"Connected to channel: {channel.title}")
+            try:
+                channel = await self.client.get_entity(self.channel_username)
+                logger.info(f"Connected to channel: {getattr(channel, 'title', self.channel_username)}")
+            except Exception as e:
+                logger.error(f"Could not connect to channel {self.channel_username}: {e}")
+                logger.info("Make sure you're a member of the channel and the username is correct")
+                return
             
             last_message_id = self.get_last_message_id()
             logger.info(f"Starting from message ID: {last_message_id}")
             
             processed_count = 0
             new_images_count = 0
+            skipped_count = 0
             
-            # Iterate through messages
+            # Iterate through messages (from newest to oldest by default)
             async for message in self.client.iter_messages(
                 channel, 
-                limit=limit, 
-                reverse=reverse,
+                limit=limit,
                 min_id=last_message_id
             ):
                 
@@ -272,11 +359,7 @@ class TelegramScraper:
                 
                 processed_count += 1
                 
-                # Generate filename
-                timestamp = message.date.strftime("%Y%m%d_%H%M%S")
-                filename = f"{timestamp}_{message.id}.jpg"
-                
-                # Check if already processed
+                # Check if already processed by message_id
                 conn = sqlite3.connect('waifu_gallery.db')
                 cursor = conn.cursor()
                 cursor.execute('SELECT 1 FROM characters WHERE message_id = ?', (message.id,))
@@ -284,8 +367,14 @@ class TelegramScraper:
                 conn.close()
                 
                 if exists:
-                    logger.info(f"Message {message.id} already processed, skipping")
+                    skipped_count += 1
+                    logger.debug(f"Message {message.id} already processed, skipping")
                     continue
+                
+                # Generate unique filename
+                timestamp = message.date.strftime("%Y%m%d_%H%M%S")
+                random_suffix = secrets.token_hex(4)
+                filename = f"{timestamp}_{message.id}_{random_suffix}.jpg"
                 
                 # Download and process image
                 image_data = await self.download_and_process_image(message, filename)
@@ -293,15 +382,29 @@ class TelegramScraper:
                 if image_data:
                     self.save_to_database(image_data)
                     new_images_count += 1
+                else:
+                    skipped_count += 1
                 
                 # Update last processed message ID
                 self.update_last_message_id(message.id)
                 
-                # Log progress every 10 messages
-                if processed_count % 10 == 0:
-                    logger.info(f"Processed {processed_count} messages, found {new_images_count} new images")
+                # Log progress every 5 messages
+                if processed_count % 5 == 0:
+                    logger.info(f"Progress: {processed_count} processed, {new_images_count} new images, {skipped_count} skipped")
+                
+                # Small delay to avoid rate limiting
+                await asyncio.sleep(0.5)
             
-            logger.info(f"Scraping completed. Processed {processed_count} messages, added {new_images_count} new images")
+            logger.info(f"🎉 Scraping completed!")
+            logger.info(f"📊 Summary: {processed_count} messages processed, {new_images_count} new images added, {skipped_count} skipped")
+            
+            # Update database stats
+            conn = sqlite3.connect('waifu_gallery.db')
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM characters')
+            total_characters = cursor.fetchone()[0]
+            conn.close()
+            logger.info(f"📚 Total characters in database: {total_characters}")
             
         except Exception as e:
             logger.error(f"Error during scraping: {e}")
@@ -310,33 +413,62 @@ class TelegramScraper:
     async def run_scraper(self, limit: int = 100):
         """Main scraper function"""
         try:
-            logger.info("Starting Telegram scraper...")
+            logger.info("🚀 Starting Telegram scraper...")
             self.init_database()
             await self.init_client()
             await self.scrape_channel(limit=limit)
-            logger.info("Scraping completed successfully")
+            logger.info("✅ Scraping completed successfully")
             
+        except KeyboardInterrupt:
+            logger.info("Scraping interrupted by user")
         except Exception as e:
-            logger.error(f"Scraper failed: {e}")
+            logger.error(f"❌ Scraper failed: {e}")
             raise
         finally:
-            await self.client.disconnect()
+            if self.client.is_connected():
+                await self.client.disconnect()
+                logger.info("Telegram client disconnected")
 
 async def main():
     # Configuration from environment variables
-    API_ID = int(os.getenv('TELEGRAM_API_ID', '0'))
+    API_ID = os.getenv('TELEGRAM_API_ID', '')
     API_HASH = os.getenv('TELEGRAM_API_HASH', '')
     PHONE = os.getenv('TELEGRAM_PHONE', '')
     CHANNEL = os.getenv('TELEGRAM_CHANNEL', '')
     LIMIT = int(os.getenv('SCRAPER_LIMIT', '100'))
     
-    if not all([API_ID, API_HASH, PHONE, CHANNEL]):
-        logger.error("Missing required environment variables")
-        logger.error("Required: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE, TELEGRAM_CHANNEL")
+    # Validate configuration
+    if not API_ID or not API_ID.isdigit():
+        logger.error("❌ TELEGRAM_API_ID is missing or invalid")
         return
     
-    scraper = TelegramScraper(API_ID, API_HASH, PHONE, CHANNEL)
-    await scraper.run_scraper(limit=LIMIT)
+    if not API_HASH:
+        logger.error("❌ TELEGRAM_API_HASH is missing")
+        return
+        
+    if not PHONE:
+        logger.error("❌ TELEGRAM_PHONE is missing")
+        return
+        
+    if not CHANNEL:
+        logger.error("❌ TELEGRAM_CHANNEL is missing")
+        return
+    
+    logger.info(f"🔧 Configuration:")
+    logger.info(f"   API ID: {API_ID}")
+    logger.info(f"   Phone: {PHONE}")
+    logger.info(f"   Channel: {CHANNEL}")
+    logger.info(f"   Limit: {LIMIT}")
+    
+    try:
+        scraper = TelegramScraper(int(API_ID), API_HASH, PHONE, CHANNEL)
+        await scraper.run_scraper(limit=LIMIT)
+    except Exception as e:
+        logger.error(f"Failed to run scraper: {e}")
+        return 1
+    
+    return 0
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    exit_code = asyncio.run(main())
+    exit(exit_code)
